@@ -16,6 +16,7 @@
 
 #include <linux/kcov.h>
 #include <linux/scs.h>
+#include <linux/sched/wfq.h>
 
 #include <asm/switch_to.h>
 #include <asm/tlb.h>
@@ -3110,6 +3111,11 @@ static void __sched_fork(unsigned long clone_flags, struct task_struct *p)
 	p->rt.on_rq		= 0;
 	p->rt.on_list		= 0;
 
+	INIT_LIST_HEAD(&p->wfq.entity_list);
+	p->wfq.weight		= WFQ_DEFAULT_WEIGHT;
+	p->wfq.new_weight	= (atomic_t) ATOMIC_INIT(WFQ_DEFAULT_WEIGHT);
+	p->wfq.vruntime		= 0;
+
 #ifdef CONFIG_PREEMPT_NOTIFIERS
 	INIT_HLIST_HEAD(&p->preempt_notifiers);
 #endif
@@ -3259,8 +3265,8 @@ int sched_fork(unsigned long clone_flags, struct task_struct *p)
 	 * Revert to default priority/policy on fork if requested.
 	 */
 	if (unlikely(p->sched_reset_on_fork)) {
-		if (task_has_dl_policy(p) || task_has_rt_policy(p)) {
-			p->policy = SCHED_NORMAL;
+		if (task_has_dl_policy(p) || task_has_rt_policy(p) || task_has_fair_policy(p)) {
+			p->policy = SCHED_WFQ;
 			p->static_prio = NICE_TO_PRIO(0);
 			p->rt_priority = 0;
 		} else if (PRIO_TO_NICE(p->static_prio) < 0)
@@ -3280,6 +3286,8 @@ int sched_fork(unsigned long clone_flags, struct task_struct *p)
 		return -EAGAIN;
 	else if (rt_prio(p->prio))
 		p->sched_class = &rt_sched_class;
+	else if (wfq_task(p))
+		p->sched_class = &wfq_sched_class;
 	else
 		p->sched_class = &fair_sched_class;
 
@@ -4026,6 +4034,7 @@ void scheduler_tick(void)
 #ifdef CONFIG_SMP
 	rq->idle_balance = idle_cpu(cpu);
 	trigger_load_balance(rq);
+	trigger_load_balance_wfq(rq);
 #endif
 }
 
@@ -4357,14 +4366,13 @@ pick_next_task(struct rq *rq, struct task_struct *prev, struct rq_flags *rf)
 	 * higher scheduling class, because otherwise those loose the
 	 * opportunity to pull in more work from other CPUs.
 	 */
-	if (likely(prev->sched_class <= &fair_sched_class &&
-		   rq->nr_running == rq->cfs.h_nr_running)) {
+	if (likely(prev->sched_class <= &wfq_sched_class &&
+		   rq->nr_running == rq->wfq.wfq_nr_running)) {
 
-		p = pick_next_task_fair(rq, prev, rf);
+		p = pick_next_task_wfq(rq, prev, rf);
 		if (unlikely(p == RETRY_TASK))
 			goto restart;
 
-		/* Assumes fair_sched_class->next == idle_sched_class */
 		if (!p) {
 			put_prev_task(rq, prev);
 			p = pick_next_task_idle(rq);
@@ -4826,6 +4834,8 @@ static void __setscheduler_prio(struct task_struct *p, int prio)
 		p->sched_class = &dl_sched_class;
 	else if (rt_prio(prio))
 		p->sched_class = &rt_sched_class;
+	else if (wfq_task(p))
+		p->sched_class = &wfq_sched_class;
 	else
 		p->sched_class = &fair_sched_class;
 
@@ -6320,6 +6330,7 @@ SYSCALL_DEFINE1(sched_get_priority_max, int, policy)
 	case SCHED_NORMAL:
 	case SCHED_BATCH:
 	case SCHED_IDLE:
+	case SCHED_WFQ:
 		ret = 0;
 		break;
 	}
@@ -6347,6 +6358,7 @@ SYSCALL_DEFINE1(sched_get_priority_min, int, policy)
 	case SCHED_NORMAL:
 	case SCHED_BATCH:
 	case SCHED_IDLE:
+	case SCHED_WFQ:
 		ret = 0;
 	}
 	return ret;
@@ -6423,6 +6435,76 @@ SYSCALL_DEFINE2(sched_rr_get_interval_time32, pid_t, pid,
 	return retval;
 }
 #endif
+
+/*
+ * This system call will fill the buffer with the required values
+ * i.e. the total number of CPUs, the number of WFQ processes on each
+ * CPU and the total weight of WFQ processes on each CPU.
+ * Return value will also be the total number of CPUs.
+ * System call number 441
+ */
+SYSCALL_DEFINE1(get_wfq_info, struct wfq_info __user *, wfq_info)
+{
+	unsigned long flags;
+	int cpu = 0;
+	int num_cpus = 0;
+	struct wfq_info k_wfq_info;
+	struct rq *rq;
+
+	if (!wfq_info)
+		return -EINVAL;
+
+	/*
+	 * For each CPU, record:
+	 * 1. Number of WFQ tasks on the RQ
+	 * 2. Total weight of WFQ tasks on the RQ
+	 */
+	for_each_online_cpu(cpu) {
+		rq = cpu_rq(cpu);
+
+		raw_spin_lock_irqsave(&rq->lock, flags);
+		k_wfq_info.nr_running[num_cpus] = rq->wfq.wfq_nr_running;
+		k_wfq_info.total_weight[num_cpus] = rq->wfq.total_weight;
+		raw_spin_unlock_irqrestore(&rq->lock, flags);
+
+		++num_cpus;
+	}
+
+	/* 3. Record total number of CPUs */
+	k_wfq_info.num_cpus = num_cpus;
+
+	if (copy_to_user(wfq_info, &k_wfq_info, sizeof(struct wfq_info)))
+		return -EFAULT;
+
+	return num_cpus;
+}
+
+
+/*
+ * This system call will change the weight for the calling process.
+ * Only a root user should be able to increase the weight beyond
+ * the default value of 10.  The system call should return an error
+ * for any weight less than 1.
+ * System call number 442.
+ */
+SYSCALL_DEFINE1(set_wfq_weight, int, weight)
+{
+	struct task_struct *curr = current;
+	int ret = 0;
+
+	if (weight < 1)
+		return -EINVAL;
+
+	/* Must be root user to increase weight beyond 10 */
+	if (weight > 10 && !uid_eq(current_uid(), GLOBAL_ROOT_UID)) {
+		ret = -EACCES;
+		goto unlock;
+	}
+	set_task_weight_wfq(curr, weight);
+
+unlock:
+	return ret;
+}
 
 void sched_show_task(struct task_struct *p)
 {
@@ -7067,7 +7149,8 @@ void __init sched_init(void)
 
 	/* Make sure the linker didn't screw up */
 	BUG_ON(&idle_sched_class + 1 != &fair_sched_class ||
-	       &fair_sched_class + 1 != &rt_sched_class ||
+	       &fair_sched_class + 1 != &wfq_sched_class ||
+		   &wfq_sched_class + 1 != &rt_sched_class ||
 	       &rt_sched_class + 1   != &dl_sched_class);
 #ifdef CONFIG_SMP
 	BUG_ON(&dl_sched_class + 1 != &stop_sched_class);
@@ -7144,6 +7227,7 @@ void __init sched_init(void)
 		init_cfs_rq(&rq->cfs);
 		init_rt_rq(&rq->rt);
 		init_dl_rq(&rq->dl);
+		init_wfq_rq(&rq->wfq);
 #ifdef CONFIG_FAIR_GROUP_SCHED
 		INIT_LIST_HEAD(&rq->leaf_cfs_rq_list);
 		rq->tmp_alone_branch = &rq->leaf_cfs_rq_list;
@@ -7222,6 +7306,7 @@ void __init sched_init(void)
 #ifdef CONFIG_SMP
 	idle_thread_set_boot_cpu();
 #endif
+	init_sched_wfq_class();
 	init_sched_fair_class();
 
 	init_schedstats();

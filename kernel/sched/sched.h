@@ -176,15 +176,27 @@ static inline int dl_policy(int policy)
 {
 	return policy == SCHED_DEADLINE;
 }
+
+static inline int wfq_policy(int policy)
+{
+	return policy == SCHED_WFQ;
+}
+
 static inline bool valid_policy(int policy)
 {
 	return idle_policy(policy) || fair_policy(policy) ||
-		rt_policy(policy) || dl_policy(policy);
+		rt_policy(policy) || dl_policy(policy) ||
+		wfq_policy(policy);
 }
 
 static inline int task_has_idle_policy(struct task_struct *p)
 {
 	return idle_policy(p->policy);
+}
+
+static inline int task_has_fair_policy(struct task_struct *p)
+{
+	return fair_policy(p->policy);
 }
 
 static inline int task_has_rt_policy(struct task_struct *p)
@@ -195,6 +207,11 @@ static inline int task_has_rt_policy(struct task_struct *p)
 static inline int task_has_dl_policy(struct task_struct *p)
 {
 	return dl_policy(p->policy);
+}
+
+static inline int task_has_wfq_policy(struct task_struct *p)
+{
+	return wfq_policy(p->policy);
 }
 
 #define cap_scale(v, s) ((v)*(s) >> SCHED_CAPACITY_SHIFT)
@@ -357,6 +374,7 @@ extern int  dl_cpu_busy(int cpu, struct task_struct *p);
 
 struct cfs_rq;
 struct rt_rq;
+struct wfq_rq;
 
 extern struct list_head task_groups;
 
@@ -715,6 +733,15 @@ struct dl_rq {
 	u64			bw_ratio;
 };
 
+struct wfq_rq {
+	unsigned int wfq_nr_running;
+	struct list_head wfq_rq_list;
+
+	int total_weight;
+
+	u64			vruntime;
+};
+
 #ifdef CONFIG_FAIR_GROUP_SCHED
 /* An entity is a task if it doesn't "own" a runqueue */
 #define entity_is_task(se)	(!se->my_q)
@@ -933,6 +960,7 @@ struct rq {
 	struct cfs_rq		cfs;
 	struct rt_rq		rt;
 	struct dl_rq		dl;
+	struct wfq_rq		wfq;
 
 #ifdef CONFIG_FAIR_GROUP_SCHED
 	/* list of leaf cfs_rq on this CPU: */
@@ -1868,6 +1896,7 @@ extern const struct sched_class dl_sched_class;
 extern const struct sched_class rt_sched_class;
 extern const struct sched_class fair_sched_class;
 extern const struct sched_class idle_sched_class;
+extern const struct sched_class wfq_sched_class;
 
 static inline bool sched_stop_runnable(struct rq *rq)
 {
@@ -1889,7 +1918,14 @@ static inline bool sched_fair_runnable(struct rq *rq)
 	return rq->cfs.nr_running > 0;
 }
 
+static inline bool sched_wfq_runnable(struct rq *rq)
+{
+	return rq->wfq.wfq_nr_running > 0;
+}
+
 extern struct task_struct *pick_next_task_fair(struct rq *rq, struct task_struct *prev, struct rq_flags *rf);
+extern struct task_struct *pick_next_task_wfq(struct rq *rq,
+	struct task_struct *prev, struct rq_flags *rf);
 extern struct task_struct *pick_next_task_idle(struct rq *rq);
 
 #ifdef CONFIG_SMP
@@ -1897,6 +1933,8 @@ extern struct task_struct *pick_next_task_idle(struct rq *rq);
 extern void update_group_capacity(struct sched_domain *sd, int cpu);
 
 extern void trigger_load_balance(struct rq *rq);
+
+extern void trigger_load_balance_wfq(struct rq *rq);
 
 extern void set_cpus_allowed_common(struct task_struct *p, const struct cpumask *new_mask);
 
@@ -1936,6 +1974,7 @@ extern void update_max_interval(void);
 extern void init_sched_dl_class(void);
 extern void init_sched_rt_class(void);
 extern void init_sched_fair_class(void);
+extern void init_sched_wfq_class(void);
 
 extern void reweight_task(struct task_struct *p, int prio);
 
@@ -2284,6 +2323,7 @@ print_numa_stats(struct seq_file *m, int node, unsigned long tsf,
 extern void init_cfs_rq(struct cfs_rq *cfs_rq);
 extern void init_rt_rq(struct rt_rq *rt_rq);
 extern void init_dl_rq(struct dl_rq *dl_rq);
+extern void init_wfq_rq(struct wfq_rq *wfq_rq);
 
 extern void cfs_bandwidth_usage_inc(void);
 extern void cfs_bandwidth_usage_dec(void);

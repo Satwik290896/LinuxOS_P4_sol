@@ -6,6 +6,7 @@
 #include <linux/sched/sysctl.h>
 #include <linux/sched/rt.h>
 #include <linux/sched/task.h>
+#include <linux/sched/wfq.h>
 #include <linux/init.h>
 #include <linux/fs.h>
 #include <linux/mm.h>
@@ -78,7 +79,7 @@ struct task_struct init_task
 	.prio		= MAX_PRIO - 20,
 	.static_prio	= MAX_PRIO - 20,
 	.normal_prio	= MAX_PRIO - 20,
-	.policy		= SCHED_NORMAL,
+	.policy		= SCHED_WFQ,
 	.cpus_ptr	= &init_task.cpus_mask,
 	.cpus_mask	= CPU_MASK_ALL,
 	.nr_cpus_allowed= NR_CPUS,
@@ -93,6 +94,12 @@ struct task_struct init_task
 	.rt		= {
 		.run_list	= LIST_HEAD_INIT(init_task.rt.run_list),
 		.time_slice	= RR_TIMESLICE,
+	},
+	.wfq	= {
+		.entity_list    = LIST_HEAD_INIT(init_task.wfq.entity_list),
+		.weight			= WFQ_DEFAULT_WEIGHT,
+		.new_weight     = ATOMIC_INIT(WFQ_DEFAULT_WEIGHT),
+		.vruntime		= 0,
 	},
 	.tasks		= LIST_HEAD_INIT(init_task.tasks),
 #ifdef CONFIG_SMP

@@ -445,3 +445,5 @@
 438	i386	pidfd_getfd		sys_pidfd_getfd
 439	i386	faccessat2		sys_faccessat2
 440	i386	process_madvise		sys_process_madvise
+441	i386	get_wfq_info		sys_get_wfq_info
+442	i386	set_wfq_weight		sys_set_wfq_weight

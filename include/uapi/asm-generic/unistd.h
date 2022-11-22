@@ -859,9 +859,13 @@ __SYSCALL(__NR_pidfd_getfd, sys_pidfd_getfd)
 __SYSCALL(__NR_faccessat2, sys_faccessat2)
 #define __NR_process_madvise 440
 __SYSCALL(__NR_process_madvise, sys_process_madvise)
+#define __NR_get_wfq_info 441
+__SYSCALL(__NR_get_wfq_info, sys_get_wfq_info)
+#define __NR_set_wfq_weight 442
+__SYSCALL(__NR_set_wfq_weight, sys_set_wfq_weight)
 
 #undef __NR_syscalls
-#define __NR_syscalls 441
+#define __NR_syscalls 443
 
 /*
  * 32 bit systems traditionally used different

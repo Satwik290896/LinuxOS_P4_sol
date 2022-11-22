@@ -589,6 +589,21 @@ struct sched_dl_entity {
 #endif
 };
 
+struct sched_wfq_entity {
+	struct list_head entity_list;
+	int weight;
+	atomic_t new_weight;
+
+	u64 vruntime;
+};
+
+#define MAX_CPUS 8 /* We will be testing only on the VMs */
+struct wfq_info {
+	int num_cpus;
+	int nr_running[MAX_CPUS];
+	int total_weight[MAX_CPUS];
+};
+
 #ifdef CONFIG_UCLAMP_TASK
 /* Number of utilization clamp buckets (shorter alias) */
 #define UCLAMP_BUCKETS CONFIG_UCLAMP_BUCKETS_COUNT
@@ -703,6 +718,7 @@ struct task_struct {
 	struct task_group		*sched_task_group;
 #endif
 	struct sched_dl_entity		dl;
+	struct sched_wfq_entity		wfq;
 
 #ifdef CONFIG_UCLAMP_TASK
 	/*

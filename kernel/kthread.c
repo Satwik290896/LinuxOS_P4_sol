@@ -404,7 +404,7 @@ struct task_struct *__kthread_create_on_node(int (*threadfn)(void *data),
 		 * root may have changed our (kthreadd's) priority or CPU mask.
 		 * The kernel thread should not inherit these properties.
 		 */
-		sched_setscheduler_nocheck(task, SCHED_NORMAL, &param);
+		sched_setscheduler_nocheck(task, SCHED_WFQ, &param);
 		set_cpus_allowed_ptr(task,
 				     housekeeping_cpumask(HK_FLAG_KTHREAD));
 	}
@@ -421,7 +421,7 @@ struct task_struct *__kthread_create_on_node(int (*threadfn)(void *data),
  *
  * Description: This helper function creates and names a kernel
  * thread.  The thread will be stopped: use wake_up_process() to start
- * it.  See also kthread_run().  The new thread has SCHED_NORMAL policy and
+ * it.  See also kthread_run().  The new thread has SCHED_WFQ policy and
  * is affine to all CPUs.
  *
  * If thread is going to be bound on a particular cpu, give its node
